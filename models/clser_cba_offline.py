@@ -58,32 +58,32 @@ class CLSERCBAoffline(ContinualModel):
 
         self.opt = SGD(self.net.params(), lr=args.lr)
         if args.dataset == 'seq-cifar10' or args.dataset == 'seq-cifar10-blurry':
-            self.total_classes = 10
             meta_lr = 1e-3
         elif args.dataset == 'seq-cifar100' or args.dataset == 'seq-cifar100-blurry':
-            self.total_classes = 100
             meta_lr = 1e-4
         elif args.dataset == 'seq-tinyimg' or args.dataset == 'seq-tinyimg-blurry':
-            self.total_classes = 200
             meta_lr = 1e-4
-        self.BiasCorrector = MetaBiasCorrector(self.total_classes, self.total_classes, hid_dim=256).to(self.device)
-        self.opt_bc = Adam(self.BiasCorrector.params(), lr=meta_lr)
+        self.CBA = MetaCBA(self.num_cls, self.num_cls, hid_dim=256).to(self.device)
+        self.opt_cba = Adam(self.CBA.params(), lr=meta_lr)
+
+        self.ii = 0
 
     def observe(self, inputs, labels, not_aug_inputs):
 
         real_batch_size = inputs.shape[0]
 
+        # Outer-loop Optimization
         if self.current_task > 0 and self.ii % 5 == 0:
-            # if self.current_task > 0 and self.ii % (5 * self.args.n_epochs) == 0:
             buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform)
-            self.bias_corrector_updating(inputs, labels, buf_inputs, buf_labels)
+            self.cba_updating(inputs, labels, buf_inputs, buf_labels)
 
+        # Inner-loop Optimization
         self.opt.zero_grad()
 
         self.net.apply(bn_no_momentum)
         _outputs = self.net(inputs)
         with torch.no_grad():
-            res_outputs = self.BiasCorrector(F.softmax(_outputs, dim=-1))
+            res_outputs = self.CBA(F.softmax(_outputs, dim=-1))
         outputs = _outputs + res_outputs
         loss = self.loss(outputs, labels)
 
@@ -119,7 +119,7 @@ class CLSERCBAoffline(ContinualModel):
 
             _buf_outputs = self.net(buf_inputs)
             with torch.no_grad():
-                buf_res_outputs = self.BiasCorrector(F.softmax(_buf_outputs, dim=-1))
+                buf_res_outputs = self.CBA(F.softmax(_buf_outputs, dim=-1))
             buf_outputs = _buf_outputs + buf_res_outputs
             ce_loss = self.loss(buf_outputs, buf_labels)
             loss += ce_loss
@@ -157,11 +157,9 @@ class CLSERCBAoffline(ContinualModel):
         for ema_param, param in zip(self.stable_model.params(), self.net.params()):
             ema_param.data.mul_(alpha).add_(1 - alpha, param.data)
 
-    def bias_corrector_updating(self, inputs, labels, buf_inputs, buf_labels):
-        # update the bias corrector by meta learning
+    def cba_updating(self, inputs, labels, buf_inputs, buf_labels):
         # 1. copy the model to meta models
-        if self.args.backbone == 'resnet18-meta':
-            meta_model = resnet18_meta(self.total_classes).to(self.device)
+        meta_model = self.load_meta_model()
         meta_model.load_state_dict(self.net.state_dict())
 
         # 2. one step updating virtually
@@ -188,8 +186,8 @@ class CLSERCBAoffline(ContinualModel):
 
         _outputs = meta_model(inputs)
         _buf_outputs = meta_model(buf_inputs)
-        res_outputs = self.BiasCorrector(F.softmax(_outputs.detach(), dim=-1))
-        buf_res_outputs = self.BiasCorrector(F.softmax(_buf_outputs.detach(), dim=-1))
+        res_outputs = self.CBA(F.softmax(_outputs.detach(), dim=-1))
+        buf_res_outputs = self.CBA(F.softmax(_buf_outputs.detach(), dim=-1))
         outputs = _outputs + res_outputs
         buf_outputs = _buf_outputs + buf_res_outputs
 
@@ -201,15 +199,27 @@ class CLSERCBAoffline(ContinualModel):
         meta_model.fc.update_params(lr_inner=self.opt.param_groups[0]['lr'], source_params=grads)
         del grads
 
-        # 3. update bias corrector by meta set
-        # (here we use samples from the memory buffer as the balanced meta set temporally)
+        # 3. update bias corrector by buffer set
         buf_inputs, buf_labels = self.buffer.get_data(self.args.minibatch_size, transform=self.transform)
         _buf_outputs = meta_model(buf_inputs)
         loss_meta = self.loss(_buf_outputs, buf_labels.long())
 
-        self.opt_bc.zero_grad()
+        self.opt_cba.zero_grad()
         loss_meta.backward()
-        self.opt_bc.step()
+        self.opt_cba.step()
+
+    def load_meta_model(self):
+        if self.args.backbone == 'resnet18-meta':
+            backbone = resnet18_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet34-meta':
+            backbone = resnet34_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet50-meta':
+            backbone = resnet50_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet101-meta':
+            backbone = resnet101_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet152-meta':
+            backbone = resnet152_meta(self.num_cls).to(self.device)
+        return backbone
 
 
 def bn_no_momentum(m):

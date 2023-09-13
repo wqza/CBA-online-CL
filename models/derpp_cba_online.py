@@ -10,12 +10,11 @@ from utils.buffer import Buffer
 from utils.args import *
 from models.utils.continual_model import ContinualModel
 from backbone.ResNet_meta import *
-from backbone.meta_adam import MetaAdam
 
 
 def get_parser() -> ArgumentParser:
     parser = ArgumentParser(description='Continual learning via'
-                                        ' Experience Replay.')
+                                        'Dark Experience Replay.')
     add_management_args(parser)
     add_experiment_args(parser)
     add_rehearsal_args(parser)
@@ -93,8 +92,7 @@ class DERppCBAonline(ContinualModel):
 
     def cba_updating(self, inputs, labels, buf_inputs1, buf_logits1, buf_inputs2, buf_labels2):
         # 1. copy the model to meta model
-        if self.args.backbone == 'resnet18-meta':
-            meta_model = resnet18_meta(self.num_cls).to(self.device)
+        meta_model = self.load_meta_model()
         meta_model.load_state_dict(self.net.state_dict())
 
         # 2. one step updating virtually
@@ -119,7 +117,7 @@ class DERppCBAonline(ContinualModel):
         meta_model.fc.update_params(lr_inner=self.opt.param_groups[0]['lr'], source_params=grads)
         del grads
 
-        # 3. update bias corrector by meta set
+        # 3. update bias corrector by buffer set
         buf_inputs, _, _, buf_logits_meta = self.buffer.get_data(self.args.minibatch_size, transform=self.transform)
         _buf_outputs = meta_model(buf_inputs)
         loss_outer = F.mse_loss(_buf_outputs, buf_logits_meta)
@@ -132,3 +130,15 @@ class DERppCBAonline(ContinualModel):
         loss_outer.backward()
         self.opt_cba.step()
 
+    def load_meta_model(self):
+        if self.args.backbone == 'resnet18-meta':
+            backbone = resnet18_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet34-meta':
+            backbone = resnet34_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet50-meta':
+            backbone = resnet50_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet101-meta':
+            backbone = resnet101_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet152-meta':
+            backbone = resnet152_meta(self.num_cls).to(self.device)
+        return backbone

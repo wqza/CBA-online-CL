@@ -10,12 +10,11 @@ from utils.buffer import Buffer
 from utils.args import *
 from models.utils.continual_model import ContinualModel
 from backbone.ResNet_meta import *
-from backbone.meta_adam import MetaAdam
 
 
 def get_parser() -> ArgumentParser:
     parser = ArgumentParser(description='Continual learning via'
-                                        ' Experience Replay.')
+                                        'Dark Experience Replay.')
     add_management_args(parser)
     add_experiment_args(parser)
     add_rehearsal_args(parser)
@@ -27,8 +26,6 @@ def get_parser() -> ArgumentParser:
 
 
 class DERppCBAoffline(ContinualModel):
-    # debug: save the logits does not through the BA
-    # with BN trick
     NAME = 'derpp-cba-offline'
     COMPATIBILITY = ['class-il', 'domain-il', 'task-il', 'general-continual']
 
@@ -37,48 +34,37 @@ class DERppCBAoffline(ContinualModel):
 
         self.opt = SGD(self.net.params(), lr=args.lr)
         if args.dataset == 'seq-cifar10' or args.dataset == 'seq-cifar10-blurry':
-            self.total_classes = 10
             meta_lr = 1e-3
         elif args.dataset == 'seq-cifar100' or args.dataset == 'seq-cifar100-blurry':
-            self.total_classes = 100
             meta_lr = 1e-4
         elif args.dataset == 'seq-tinyimg' or args.dataset == 'seq-tinyimg-blurry':
-            self.total_classes = 200
             meta_lr = 1e-4
-        self.BiasCorrector = MetaBiasCorrector(self.total_classes, self.total_classes, hid_dim=256).to(self.device)
-        # self.opt_bc = Adam(self.BiasCorrector.params(), lr=0.01, weight_decay=1e-4)
-        self.opt_bc = Adam(self.BiasCorrector.params(), lr=meta_lr)
+        self.CBA = MetaCBA(self.num_cls, self.num_cls, hid_dim=256).to(self.device)
+        self.opt_cba = Adam(self.CBA.params(), lr=meta_lr)
 
         self.buffer = Buffer(self.args.buffer_size, self.device)
 
         self.current_task = 0
-        self.seen_classes = 0
-        self.hidden_dim = 512
-
         self.ii = 0
-
-        self.epoch = 0
 
     def observe(self, inputs, labels, not_aug_inputs):
         iter_num = 1
         for ii in range(iter_num):
-            # update the bias corrector by meta learning
             if not self.buffer.is_empty():
                 buf_inputs1, _, buf_logits1, _ = self.buffer.get_data(self.args.minibatch_size, transform=self.transform)
                 buf_inputs2, buf_labels2, _, _ = self.buffer.get_data(self.args.minibatch_size, transform=self.transform)
-            else:
-                buf_inputs1, buf_logits1 = None, None
-                buf_inputs2, buf_labels2 = None, None
 
+            # Outer-loop Optimization
             if self.current_task > 0 and self.ii % 5 == 0:
-            # if self.current_task > 0 and self.ii % (5 * self.args.n_epochs) == 0:
-                self.bias_corrector_updating(inputs, labels, buf_inputs1, buf_logits1, buf_inputs2, buf_labels2)
+                self.cba_updating(inputs, labels,
+                                  buf_inputs1, buf_logits1,
+                                  buf_inputs2, buf_labels2)
 
-            # update the total network by new task and buffer samples
+            # Inner-loop Optimization
             self.net.apply(bn_no_momentum)
             _outputs = self.net(inputs)
             with torch.no_grad():
-                res_outputs = self.BiasCorrector(F.softmax(_outputs, dim=-1))
+                res_outputs = self.CBA(F.softmax(_outputs, dim=-1))
             outputs = _outputs + res_outputs
             loss = self.loss(outputs, labels.long())
 
@@ -87,8 +73,8 @@ class DERppCBAoffline(ContinualModel):
                 _buf_outputs1 = self.net(buf_inputs1)
                 _buf_outputs2 = self.net(buf_inputs2)
                 with torch.no_grad():
-                    res_buf_outputs1 = self.BiasCorrector(F.softmax(_buf_outputs1, dim=-1))
-                    res_buf_outputs2 = self.BiasCorrector(F.softmax(_buf_outputs2, dim=-1))
+                    res_buf_outputs1 = self.CBA(F.softmax(_buf_outputs1, dim=-1))
+                    res_buf_outputs2 = self.CBA(F.softmax(_buf_outputs2, dim=-1))
                 buf_outputs1 = _buf_outputs1 + res_buf_outputs1
                 buf_outputs2 = _buf_outputs2 + res_buf_outputs2
 
@@ -106,11 +92,9 @@ class DERppCBAoffline(ContinualModel):
 
         return loss.item()
 
-    def bias_corrector_updating(self, inputs, labels, buf_inputs1, buf_logits1, buf_inputs2, buf_labels2):
-        # update the bias corrector by meta learning
+    def cba_updating(self, inputs, labels, buf_inputs1, buf_logits1, buf_inputs2, buf_labels2):
         # 1. copy the model to meta model
-        if self.args.backbone == 'resnet18-meta':
-            meta_model = resnet18_meta(self.total_classes).to(self.device)
+        meta_model = self.load_meta_model()
         meta_model.load_state_dict(self.net.state_dict())
 
         # 2. one step updating virtually
@@ -118,9 +102,9 @@ class DERppCBAoffline(ContinualModel):
         _buf_outputs1 = meta_model(buf_inputs1)
         _buf_outputs2 = meta_model(buf_inputs2)
 
-        res_outputs = self.BiasCorrector(F.softmax(_outputs.detach(), dim=-1))
-        res_buf_outputs1 = self.BiasCorrector(F.softmax(_buf_outputs1.detach(), dim=-1))
-        res_buf_outputs2 = self.BiasCorrector(F.softmax(_buf_outputs2.detach(), dim=-1))
+        res_outputs = self.CBA(F.softmax(_outputs.detach(), dim=-1))
+        res_buf_outputs1 = self.CBA(F.softmax(_buf_outputs1.detach(), dim=-1))
+        res_buf_outputs2 = self.CBA(F.softmax(_buf_outputs2.detach(), dim=-1))
 
         outputs = _outputs + res_outputs
         buf_outputs1 = _buf_outputs1 + res_buf_outputs1
@@ -135,8 +119,7 @@ class DERppCBAoffline(ContinualModel):
         meta_model.fc.update_params(lr_inner=self.opt.param_groups[0]['lr'], source_params=grads)
         del grads
 
-        # 3. update bias corrector by meta set
-        # (here we use samples from the memory buffer as the balanced meta set temporally)
+        # 3. update bias corrector by buffer set
         buf_inputs, _, _, buf_logits_meta = self.buffer.get_data(self.args.minibatch_size, transform=self.transform)
         _buf_outputs = meta_model(buf_inputs)
         loss_meta = F.mse_loss(_buf_outputs, buf_logits_meta)
@@ -145,9 +128,22 @@ class DERppCBAoffline(ContinualModel):
         _buf_outputs = meta_model(buf_inputs)
         loss_meta += self.loss(_buf_outputs, buf_labels.long())
 
-        self.opt_bc.zero_grad()
+        self.opt_cba.zero_grad()
         loss_meta.backward()
-        self.opt_bc.step()
+        self.opt_cba.step()
+
+    def load_meta_model(self):
+        if self.args.backbone == 'resnet18-meta':
+            backbone = resnet18_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet34-meta':
+            backbone = resnet34_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet50-meta':
+            backbone = resnet50_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet101-meta':
+            backbone = resnet101_meta(self.num_cls).to(self.device)
+        elif self.args.backbone == 'resnet152-meta':
+            backbone = resnet152_meta(self.num_cls).to(self.device)
+        return backbone
 
 
 def bn_no_momentum(m):
