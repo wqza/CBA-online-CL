@@ -4,9 +4,9 @@ This is an official PyTorch implementation of [**"CBA: Improving Online Continua
 
 Please contact Quanziang Wang ([quanziangwang@gmail.com](mailto:quanziangwang@gmail.com)), Renzhen Wang ([rzwang@xjtu.edu.cn](mailto:rzwang@xjtu.edu.cn)), or Deyu Meng ([dymeng@xjtu.edu.cn](mailto:dymeng@xjtu.edu.cn)).
 
-![image-20230902181608607](E:\MENG\02_continual_learning\05_classifier\01_code\CBA-online-CL-ICCV23\main_illustration)
+![Main Illustration](https://github.com/wqza/CBA-online-CL/blob/main/pics/main_illustration.png)
 
-* We extended the Mammoth framework with our method and applied on various rehearsal-based baselines.
+* We extended the Mammoth framework with our method and applied it to various rehearsal-based baselines.
 
 
 
@@ -40,7 +40,7 @@ Please contact Quanziang Wang ([quanziangwang@gmail.com](mailto:quanziangwang@gm
 
 ## Cite Our Work
 
-If you find our work or this code are useful, please cite us:
+If you find our work or this code is useful, please cite us:
 
 ```
 @inproceedings{cba,
