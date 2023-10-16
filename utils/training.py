@@ -89,7 +89,7 @@ def train(model: ContinualModel, dataset: ContinualDataset,
     """
 
     # save args
-    save_path = os.path.join(os.getcwd(), 'visualization', model.NAME + '-' + dataset.NAME + '-' + args.exp)
+    save_path = os.path.join(os.getcwd(), 'results', model.NAME + '-' + dataset.NAME + '-' + args.exp)
     if not os.path.exists(save_path):
         os.makedirs(save_path)
     with open(os.path.join(save_path, 'record.txt'), 'a') as f:
