@@ -30,11 +30,6 @@ class Er(ContinualModel):
         self.epoch = 0
         self.task = 0
 
-        self.perturbation = torch.normal(mean=torch.zeros(self.net.fc.weight.shape[0], 512), std=0.1).to(self.device)
-        self.perturbation.requires_grad = True
-        self.perturbation_opt = torch.optim.SGD(params=[{'params': self.perturbation}],
-                                    lr=1e-4, momentum=0.9, weight_decay=1e-4)
-
     def observe(self, inputs, labels, not_aug_inputs):
 
         real_batch_size = inputs.shape[0]
