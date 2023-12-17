@@ -6,7 +6,7 @@ Please contact Quanziang Wang ([quanziangwang@gmail.com](mailto:quanziangwang@gm
 
 ![Main Illustration](https://github.com/wqza/CBA-online-CL/blob/main/pics/main_illustration.png)
 
-* We extended the Mammoth framework with our method and applied it to various rehearsal-based baselines.
+* We extended the [Mammoth](https://github.com/aimagelab/mammoth) framework with our method and applied it to various rehearsal-based baselines.
 
 
 
